@@ -1,0 +1,26 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: btc-polymarket-timescaledb
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-btc_polymarket_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-btc_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-btc_password_dev}
+
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./infra/timescaledb/initdb:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-btc_user} -d ${POSTGRES_DB:-btc_polymarket_bot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  timescale_data:
