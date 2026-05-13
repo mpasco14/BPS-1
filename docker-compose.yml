@@ -22,5 +22,32 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: btc-polymarket-redis
+    restart: unless-stopped
+
+    command:
+      [
+        "redis-server",
+        "--appendonly", "yes",
+        "--requirepass", "${REDIS_PASSWORD:-redis_password_dev}",
+        "--maxmemory", "512mb",
+        "--maxmemory-policy", "allkeys-lru"
+      ]
+
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+    volumes:
+      - redis_data:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_password_dev}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   timescale_data:
+  redis_data:
