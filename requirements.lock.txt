@@ -8,6 +8,7 @@ charset-normalizer==3.4.7
 ckzg==2.1.7
 click==8.3.3
 colorama==0.4.6
+confluent-kafka==2.14.0
 cytoolz==1.1.0
 eth-account==0.13.7
 eth-hash==0.8.0

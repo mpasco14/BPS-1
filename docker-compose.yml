@@ -48,6 +48,43 @@ services:
       timeout: 5s
       retries: 5
 
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: btc-polymarket-redpanda
+    restart: unless-stopped
+
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:9092,OUTSIDE://localhost:19092
+
+    ports:
+      - "19092:19092"
+      - "9644:9644"
+
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy|true' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   timescale_data:
   redis_data:
+  redpanda_data:
