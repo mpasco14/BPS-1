@@ -4,6 +4,17 @@ services:
     container_name: btc-polymarket-timescaledb
     restart: unless-stopped
 
+    mem_limit: 512m
+
+    command:
+      [
+        "postgres",
+        "-c", "shared_buffers=128MB",
+        "-c", "work_mem=8MB",
+        "-c", "maintenance_work_mem=64MB",
+        "-c", "max_connections=30"
+      ]
+
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-btc_polymarket_bot}
       POSTGRES_USER: ${POSTGRES_USER:-btc_user}
@@ -27,12 +38,14 @@ services:
     container_name: btc-polymarket-redis
     restart: unless-stopped
 
+    mem_limit: 128m
+
     command:
       [
         "redis-server",
         "--appendonly", "yes",
         "--requirepass", "${REDIS_PASSWORD:-redis_password_dev}",
-        "--maxmemory", "512mb",
+        "--maxmemory", "96mb",
         "--maxmemory-policy", "allkeys-lru"
       ]
 
@@ -53,6 +66,8 @@ services:
     container_name: btc-polymarket-redpanda
     restart: unless-stopped
 
+    mem_limit: 768m
+
     command:
       - redpanda
       - start
@@ -60,7 +75,7 @@ services:
       - --smp
       - "1"
       - --memory
-      - 1G
+      - 512M
       - --reserve-memory
       - 0M
       - --node-id
