@@ -32,7 +32,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
   redis:
     image: redis:7-alpine
     container_name: btc-polymarket-redis
@@ -60,7 +59,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
   redpanda:
     image: redpandadata/redpanda:latest
     container_name: btc-polymarket-redpanda
@@ -98,8 +96,33 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: btc-polymarket-minio
+    restart: unless-stopped
 
+    mem_limit: 256m
+
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+
+    command: server /data --console-address ":9001"
+
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    volumes:
+      - minio_data:/data
+
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 volumes:
   timescale_data:
   redis_data:
   redpanda_data:
+  minio_data:
