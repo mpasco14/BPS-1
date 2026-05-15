@@ -4,9 +4,12 @@ Polymarket Gamma connector.
 Este módulo descobre mercados ativos de Bitcoin na Polymarket.
 
 Responsabilidades:
-- Chamar GET /markets na Gamma API.
-- Filtrar mercados ativos relacionados a Bitcoin.
-- Detectar timeframe pela pergunta do mercado.
+- Chamar a Gamma API pública.
+- Buscar eventos ativos em GET /events.
+- Extrair markets de dentro de cada evento.
+- Usar GET /markets como fallback.
+- Filtrar mercados relacionados a Bitcoin.
+- Detectar timeframe pela pergunta do mercado: 5m, 15m, 1h, 1d.
 - Extrair market_id, condition_id, question, end_time e tokens YES/NO.
 
 Este módulo NÃO executa ordens.
@@ -41,6 +44,11 @@ class PolymarketMarket:
     timeframe: str
     yes_token_id: str | None
     no_token_id: str | None
+    event_id: str | None = None
+    event_slug: str | None = None
+    event_title: str | None = None
+    slug: str | None = None
+    source_endpoint: str = "events"
 
 
 def parse_json_list(value: Any) -> list[Any]:
@@ -58,6 +66,9 @@ def parse_json_list(value: Any) -> list[Any]:
 
     if isinstance(value, list):
         return value
+
+    if isinstance(value, tuple):
+        return list(value)
 
     if isinstance(value, str):
         value = value.strip()
@@ -91,16 +102,16 @@ def detect_timeframe(question: str) -> str | None:
     """
     text = question.lower()
 
-    if re.search(r"\b(5m|5 min|5 mins|5 minute|5 minutes|5-minute)\b", text):
+    if re.search(r"\b(5m|5\s*min|5\s*mins|5\s*minute|5\s*minutes|5-minute)\b", text):
         return "5m"
 
-    if re.search(r"\b(15m|15 min|15 mins|15 minute|15 minutes|15-minute)\b", text):
+    if re.search(r"\b(15m|15\s*min|15\s*mins|15\s*minute|15\s*minutes|15-minute)\b", text):
         return "15m"
 
-    if re.search(r"\b(1h|1 hr|1 hour|hourly|1-hour)\b", text):
+    if re.search(r"\b(1h|1\s*hr|1\s*hour|hourly|1-hour)\b", text):
         return "1h"
 
-    if re.search(r"\b(1d|1 day|daily|1-day|today|tomorrow)\b", text):
+    if re.search(r"\b(1d|1\s*day|daily|1-day|today|tomorrow)\b", text):
         return "1d"
 
     duration = detect_duration_from_time_range(question)
@@ -172,17 +183,28 @@ def convert_to_minutes(hour: int, minute: int, ampm: str | None) -> int:
     return hour * 60 + minute
 
 
-def looks_like_bitcoin_market(raw_market: dict[str, Any]) -> bool:
+def looks_like_bitcoin_market(
+    raw_market: dict[str, Any],
+    event: dict[str, Any] | None = None,
+) -> bool:
     """
     Verifica se o mercado parece ser de Bitcoin.
 
-    Usamos isso como proteção adicional, porque filtros por tag podem variar.
+    Analisamos tanto os campos do market quanto os campos do event,
+    porque em /events muitas informações ficam no nível do evento.
     """
+    event = event or {}
+
     parts = [
         raw_market.get("question"),
         raw_market.get("slug"),
         raw_market.get("description"),
         raw_market.get("category"),
+        raw_market.get("groupItemTitle"),
+        event.get("title"),
+        event.get("slug"),
+        event.get("ticker"),
+        event.get("description"),
     ]
 
     text = " ".join(str(part or "") for part in parts).lower()
@@ -190,10 +212,45 @@ def looks_like_bitcoin_market(raw_market: dict[str, Any]) -> bool:
     return bool(re.search(r"\b(bitcoin|btc|btcusd|btcusdt)\b", text))
 
 
-def normalize_market(raw_market: dict[str, Any]) -> PolymarketMarket | None:
+def is_active_tradeable_market(raw_market: dict[str, Any]) -> bool:
+    """
+    Mantém apenas mercados úteis para o bot.
+
+    Regras:
+    - active não pode ser False
+    - closed não pode ser True
+    - archived não pode ser True
+    - enableOrderBook não pode ser False
+    - acceptingOrders não pode ser False quando o campo existir
+    """
+    if raw_market.get("active") is False:
+        return False
+
+    if raw_market.get("closed") is True:
+        return False
+
+    if raw_market.get("archived") is True:
+        return False
+
+    if raw_market.get("enableOrderBook") is False:
+        return False
+
+    if raw_market.get("acceptingOrders") is False:
+        return False
+
+    return True
+
+
+def normalize_market(
+    raw_market: dict[str, Any],
+    event: dict[str, Any] | None = None,
+    source_endpoint: str = "events",
+) -> PolymarketMarket | None:
     """
     Transforma um mercado bruto da Gamma API em um objeto limpo do nosso projeto.
     """
+    event = event or {}
+
     market_id = str(raw_market.get("id") or "").strip()
     question = str(raw_market.get("question") or "").strip()
 
@@ -237,12 +294,21 @@ def normalize_market(raw_market: dict[str, Any]) -> PolymarketMarket | None:
         timeframe=timeframe,
         yes_token_id=yes_token_id,
         no_token_id=no_token_id,
+        event_id=str(event.get("id")) if event.get("id") is not None else None,
+        event_slug=event.get("slug"),
+        event_title=event.get("title"),
+        slug=raw_market.get("slug"),
+        source_endpoint=source_endpoint,
     )
 
 
 class PolymarketGammaClient:
     """
     Cliente simples da Gamma API.
+
+    Ordem de descoberta:
+    1. /events, porque eventos já trazem markets associados.
+    2. /markets como fallback.
     """
 
     def __init__(self) -> None:
@@ -264,20 +330,20 @@ class PolymarketGammaClient:
         self.client = httpx.Client(
             base_url=self.base_url,
             timeout=self.timeout_seconds,
-            headers={"Accept": "application/json"},
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "btc-polymarket-bot/0.1",
+            },
         )
 
     def close(self) -> None:
         self.client.close()
 
-    def fetch_markets_page(self, offset: int = 0) -> list[dict[str, Any]]:
+    def fetch_events_page(self, offset: int = 0, use_tag_filter: bool = True) -> list[dict[str, Any]]:
         """
-        Busca uma página de mercados.
+        Busca uma página de eventos.
 
-        Usamos:
-        - active=true
-        - closed=false
-        - tag=bitcoin quando não houver tag_id
+        O endpoint /events é preferido para descoberta, porque eventos contêm markets.
         """
         params: dict[str, Any] = {
             "limit": self.limit,
@@ -286,10 +352,45 @@ class PolymarketGammaClient:
             "closed": "false",
         }
 
-        if self.bitcoin_tag_id:
-            params["tag_id"] = self.bitcoin_tag_id
-        else:
-            params["tag"] = self.bitcoin_tag
+        if use_tag_filter:
+            if self.bitcoin_tag_id:
+                params["tag_id"] = self.bitcoin_tag_id
+            elif self.bitcoin_tag:
+                params["tag"] = self.bitcoin_tag
+
+        response = self.client.get("/events", params=params)
+        response.raise_for_status()
+
+        payload = response.json()
+
+        if isinstance(payload, list):
+            return payload
+
+        if isinstance(payload, dict):
+            for key in ("events", "data", "results"):
+                if isinstance(payload.get(key), list):
+                    return payload[key]
+
+        raise ValueError("Formato inesperado na resposta da Gamma API /events")
+
+    def fetch_markets_page(self, offset: int = 0, use_tag_filter: bool = True) -> list[dict[str, Any]]:
+        """
+        Busca uma página de mercados diretamente em /markets.
+
+        Mantido como fallback.
+        """
+        params: dict[str, Any] = {
+            "limit": self.limit,
+            "offset": offset,
+            "active": "true",
+            "closed": "false",
+        }
+
+        if use_tag_filter:
+            if self.bitcoin_tag_id:
+                params["tag_id"] = self.bitcoin_tag_id
+            elif self.bitcoin_tag:
+                params["tag"] = self.bitcoin_tag
 
         response = self.client.get("/markets", params=params)
         response.raise_for_status()
@@ -304,26 +405,81 @@ class PolymarketGammaClient:
                 if isinstance(payload.get(key), list):
                     return payload[key]
 
-        raise ValueError("Formato inesperado na resposta da Gamma API")
+        raise ValueError("Formato inesperado na resposta da Gamma API /markets")
 
-    def discover_bitcoin_markets(self) -> list[PolymarketMarket]:
+    def discover_from_events(self, use_tag_filter: bool = True) -> list[PolymarketMarket]:
         """
-        Busca e normaliza mercados ativos de Bitcoin.
+        Descobre mercados extraindo event["markets"].
         """
         discovered: list[PolymarketMarket] = []
 
         for page in range(self.max_pages):
             offset = page * self.limit
-            raw_markets = self.fetch_markets_page(offset=offset)
+            events = self.fetch_events_page(offset=offset, use_tag_filter=use_tag_filter)
+
+            if not events:
+                break
+
+            for event in events:
+                raw_markets = event.get("markets") or []
+
+                if not isinstance(raw_markets, list):
+                    continue
+
+                for raw_market in raw_markets:
+                    if not isinstance(raw_market, dict):
+                        continue
+
+                    if not is_active_tradeable_market(raw_market):
+                        continue
+
+                    if not looks_like_bitcoin_market(raw_market, event=event):
+                        continue
+
+                    market = normalize_market(
+                        raw_market,
+                        event=event,
+                        source_endpoint="events",
+                    )
+
+                    if market is None:
+                        continue
+
+                    discovered.append(market)
+
+            if len(events) < self.limit:
+                break
+
+        return discovered
+
+    def discover_from_markets(self, use_tag_filter: bool = True) -> list[PolymarketMarket]:
+        """
+        Descobre mercados diretamente em /markets.
+        """
+        discovered: list[PolymarketMarket] = []
+
+        for page in range(self.max_pages):
+            offset = page * self.limit
+            raw_markets = self.fetch_markets_page(offset=offset, use_tag_filter=use_tag_filter)
 
             if not raw_markets:
                 break
 
             for raw_market in raw_markets:
+                if not isinstance(raw_market, dict):
+                    continue
+
+                if not is_active_tradeable_market(raw_market):
+                    continue
+
                 if not looks_like_bitcoin_market(raw_market):
                     continue
 
-                market = normalize_market(raw_market)
+                market = normalize_market(
+                    raw_market,
+                    event=None,
+                    source_endpoint="markets",
+                )
 
                 if market is None:
                     continue
@@ -334,6 +490,52 @@ class PolymarketGammaClient:
                 break
 
         return discovered
+
+    def discover_bitcoin_markets(self) -> list[PolymarketMarket]:
+        """
+        Descobre mercados ativos de Bitcoin.
+
+        Ordem:
+        1. /events com filtro de tag
+        2. /events sem filtro de tag
+        3. /markets com filtro de tag
+        4. /markets sem filtro de tag
+        """
+        discovery_attempts = [
+            self.discover_from_events,
+            lambda use_tag_filter=True: self.discover_from_events(use_tag_filter=False),
+            self.discover_from_markets,
+            lambda use_tag_filter=True: self.discover_from_markets(use_tag_filter=False),
+        ]
+
+        for attempt in discovery_attempts:
+            markets = attempt()
+
+            if markets:
+                return deduplicate_markets(markets)
+
+        return []
+
+
+def deduplicate_markets(markets: list[PolymarketMarket]) -> list[PolymarketMarket]:
+    """
+    Remove duplicados mantendo a ordem.
+
+    Prioriza condition_id quando existir, senão usa market_id.
+    """
+    seen: set[str] = set()
+    unique: list[PolymarketMarket] = []
+
+    for market in markets:
+        key = market.condition_id or market.market_id
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        unique.append(market)
+
+    return unique
 
 
 def market_to_dict(market: PolymarketMarket) -> dict[str, Any]:
