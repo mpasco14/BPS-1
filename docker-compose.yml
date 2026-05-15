@@ -181,6 +181,44 @@ services:
 
     depends_on:
       - prometheus
+  loki:
+    image: grafana/loki:latest
+    container_name: btc-polymarket-loki
+    restart: unless-stopped
+
+    mem_limit: 256m
+
+    command:
+      - "-config.file=/etc/loki/loki-config.yml"
+
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: btc-polymarket-alloy
+    restart: unless-stopped
+
+    mem_limit: 128m
+
+    command:
+      - "run"
+      - "/etc/alloy/config.alloy"
+      - "--server.http.listen-addr=0.0.0.0:${ALLOY_PORT:-12345}"
+
+    ports:
+      - "${ALLOY_PORT:-12345}:${ALLOY_PORT:-12345}"
+
+    volumes:
+      - ./monitoring/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - ./logs:/var/log/btc-polymarket-bot:ro
+
+    depends_on:
+      - loki
 volumes:
   timescale_data:
   redis_data:
@@ -188,3 +226,4 @@ volumes:
   minio_data:
   prometheus_data:
   grafana_data:
+  loki_data:

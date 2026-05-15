@@ -1,0 +1,33 @@
+loki.source.file "app_logs" {
+  targets = [
+    {
+      __path__    = "/var/log/btc-polymarket-bot/app/app.log",
+      service     = "btc-polymarket-bot",
+      environment = "dev",
+      log_type    = "application",
+      component   = "app",
+    },
+  ]
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.source.file "audit_decisions" {
+  targets = [
+    {
+      __path__    = "/var/log/btc-polymarket-bot/audit/decisions.jsonl",
+      service     = "btc-polymarket-bot",
+      environment = "dev",
+      log_type    = "audit",
+      component   = "decision_engine",
+    },
+  ]
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
