@@ -425,3 +425,271 @@ def assessment_to_dict(assessment: RiskAssessment) -> dict[str, Any]:
 
 def should_forward_to_executor(assessment: RiskAssessment) -> bool:
     return assessment.decision == "APPROVED" and assessment.order_plan is not None
+# ============================================================
+# Fase 5 — Final Signal Approval
+# ============================================================
+
+from risk.exposure import ExposureSnapshot, default_exposure_snapshot, exposure_pct
+from risk.sizing import SizingPlan, calculate_fractional_kelly_position
+
+
+class SignalApprovalResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    source: str = "risk_manager"
+    approved: bool
+
+    venue: str = "binance_futures"
+    symbol: str = "BTCUSDT"
+    timeframe: str
+
+    direction: str
+    confidence: float
+
+    blockers: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+
+    sizing: dict[str, Any] | None = None
+    exposure: dict[str, Any] | None = None
+
+    approved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def get_timeframe_max_exposure_pct(timeframe: str) -> float:
+    mapping = {
+        "5m": "RISK_MAX_EXPOSURE_5M",
+        "15m": "RISK_MAX_EXPOSURE_15M",
+        "1h": "RISK_MAX_EXPOSURE_1H",
+        "1d": "RISK_MAX_EXPOSURE_1D",
+    }
+
+    defaults = {
+        "5m": 0.02,
+        "15m": 0.04,
+        "1h": 0.06,
+        "1d": 0.08,
+    }
+
+    tf = timeframe.lower()
+
+    return env_float(mapping.get(tf, "RISK_MAX_EXPOSURE_5M"), defaults.get(tf, 0.02))
+
+
+def get_timeframe_min_edge(timeframe: str) -> float:
+    mapping = {
+        "5m": "RISK_MIN_EDGE_5M",
+        "15m": "RISK_MIN_EDGE_15M",
+        "1h": "RISK_MIN_EDGE_1H",
+        "1d": "RISK_MIN_EDGE_1D",
+    }
+
+    defaults = {
+        "5m": 0.035,
+        "15m": 0.025,
+        "1h": 0.020,
+        "1d": 0.015,
+    }
+
+    tf = timeframe.lower()
+
+    return env_float(mapping.get(tf, "RISK_MIN_EDGE_5M"), defaults.get(tf, 0.02))
+
+
+def extract_edge_from_signal(signal_payload: dict[str, Any]) -> float | None:
+    for key in ["edge", "edge_ratio", "expected_edge"]:
+        value = safe_float(signal_payload.get(key))
+
+        if value is not None:
+            return value
+
+    prediction = signal_payload.get("prediction")
+
+    if isinstance(prediction, dict):
+        expected_value = safe_float(prediction.get("expected_value_usd"))
+        loss = env_float("RISK_GROSS_STOP_LOSS_USD", 1.05)
+
+        if expected_value is not None and loss > 0:
+            return expected_value / loss
+
+    raw_features = signal_payload.get("raw_features")
+
+    if isinstance(raw_features, dict):
+        expected_value = safe_float(raw_features.get("expected_value_usd"))
+        loss = env_float("RISK_GROSS_STOP_LOSS_USD", 1.05)
+
+        if expected_value is not None and loss > 0:
+            return expected_value / loss
+
+    return None
+
+
+def approve(
+    signal: TradingSignal | dict[str, Any],
+    *,
+    risk_assessment: RiskAssessment | None = None,
+    exposure_snapshot: ExposureSnapshot | None = None,
+    market_liquidity_usd: float | None = None,
+) -> bool:
+    return approve_signal(
+        signal,
+        risk_assessment=risk_assessment,
+        exposure_snapshot=exposure_snapshot,
+        market_liquidity_usd=market_liquidity_usd,
+    ).approved
+
+
+def approve_signal(
+    signal: TradingSignal | dict[str, Any],
+    *,
+    risk_assessment: RiskAssessment | None = None,
+    exposure_snapshot: ExposureSnapshot | None = None,
+    market_liquidity_usd: float | None = None,
+) -> SignalApprovalResult:
+    parsed_signal = signal if isinstance(signal, TradingSignal) else TradingSignal.model_validate(signal)
+    payload = parsed_signal.model_dump(mode="json")
+
+    snapshot = exposure_snapshot or default_exposure_snapshot()
+
+    blockers: list[str] = []
+    reasons: list[str] = []
+
+    if parsed_signal.decision != "ENTER":
+        blockers.append("signal_not_enter")
+
+    if parsed_signal.direction not in {"LONG", "SHORT"}:
+        blockers.append("invalid_direction")
+
+    min_confidence = env_float("RISK_MIN_CONFIDENCE", 0.65)
+
+    if parsed_signal.confidence < min_confidence:
+        blockers.append("confidence_below_minimum")
+
+    if risk_assessment is not None and risk_assessment.decision != "APPROVED":
+        blockers.append("risk_assessment_not_approved")
+
+    plan = risk_assessment.order_plan if risk_assessment is not None else None
+
+    margin_usd = plan.margin_usd if plan is not None else env_float("RISK_MARGIN_USD", 20.0)
+    max_loss_with_fees = (
+        plan.max_loss_with_fees_usd
+        if plan is not None
+        else env_float("RISK_GROSS_STOP_LOSS_USD", 1.05)
+    )
+
+    bankroll = snapshot.total_bankroll_usd
+
+    max_trade_risk_pct = env_float("RISK_MAX_TRADE_RISK_PCT", 0.01)
+    trade_risk_pct = max_loss_with_fees / bankroll if bankroll > 0 else 1.0
+
+    reasons.append(f"trade_risk_pct:{trade_risk_pct:.6f}")
+
+    if trade_risk_pct > max_trade_risk_pct:
+        blockers.append("trade_risk_above_limit")
+
+    max_daily_loss_pct = env_float("RISK_MAX_DAILY_LOSS_PCT", 0.03)
+    daily_loss_pct = abs(min(snapshot.daily_pnl_usd, 0.0)) / bankroll if bankroll > 0 else 1.0
+
+    reasons.append(f"daily_loss_pct:{daily_loss_pct:.6f}")
+
+    if daily_loss_pct >= max_daily_loss_pct:
+        blockers.append("daily_loss_limit_reached")
+
+    symbol = parsed_signal.symbol.upper()
+    timeframe = parsed_signal.timeframe.lower()
+
+    current_market_exposure = snapshot.exposure_per_market.get(symbol, 0.0)
+    market_exposure_after = current_market_exposure + margin_usd
+
+    max_market_exposure_pct = env_float("RISK_MAX_MARKET_EXPOSURE_PCT", 0.05)
+    market_exposure_pct = exposure_pct(snapshot, market_exposure_after)
+
+    reasons.append(f"market_exposure_pct_after:{market_exposure_pct:.6f}")
+
+    if market_exposure_pct > max_market_exposure_pct:
+        blockers.append("market_exposure_above_limit")
+
+    current_timeframe_exposure = snapshot.exposure_by_timeframe.get(timeframe, 0.0)
+    timeframe_exposure_after = current_timeframe_exposure + margin_usd
+
+    max_timeframe_exposure_pct = get_timeframe_max_exposure_pct(timeframe)
+    timeframe_exposure_pct = exposure_pct(snapshot, timeframe_exposure_after)
+
+    reasons.append(f"timeframe_exposure_pct_after:{timeframe_exposure_pct:.6f}")
+
+    if timeframe_exposure_pct > max_timeframe_exposure_pct:
+        blockers.append("timeframe_exposure_above_limit")
+
+    directional_sign = 1 if parsed_signal.direction == "LONG" else -1
+    directional_after = snapshot.btc_directional_exposure_usd + directional_sign * margin_usd
+    directional_pct = abs(directional_after) / bankroll if bankroll > 0 else 1.0
+
+    max_directional_pct = env_float("RISK_MAX_BTC_DIRECTIONAL_EXPOSURE_PCT", 0.10)
+
+    reasons.append(f"btc_directional_exposure_pct_after:{directional_pct:.6f}")
+
+    if directional_pct > max_directional_pct:
+        blockers.append("btc_directional_exposure_above_limit")
+
+    edge = extract_edge_from_signal(payload)
+    min_edge = get_timeframe_min_edge(timeframe)
+
+    if edge is None:
+        reasons.append("edge_not_available")
+
+        if env_bool("RISK_REQUIRE_EDGE", False):
+            blockers.append("edge_missing")
+    else:
+        reasons.append(f"edge:{edge:.6f}")
+
+        if edge < min_edge:
+            blockers.append("edge_below_timeframe_minimum")
+
+    raw_features = payload.get("raw_features") or {}
+    liquidity = market_liquidity_usd
+
+    if liquidity is None:
+        liquidity = safe_float(raw_features.get("binance_liquidity_usd"))
+
+    if liquidity is None:
+        liquidity = env_float("RISK_MIN_LIQUIDITY_USD", 50000.0)
+
+    sizing_plan: SizingPlan | None = None
+
+    if edge is not None and plan is not None:
+        odds = plan.gross_take_profit_usd / plan.gross_stop_loss_usd
+
+        sizing_plan = calculate_fractional_kelly_position(
+            bankroll_usd=bankroll,
+            edge=edge,
+            odds=odds,
+            market_liquidity_usd=liquidity,
+        )
+
+        reasons.extend(sizing_plan.reasons)
+
+        for blocker in sizing_plan.blockers:
+            blockers.append(f"sizing_{blocker}")
+
+    approved = not blockers
+
+    return SignalApprovalResult(
+        approved=approved,
+        venue=parsed_signal.venue,
+        symbol=parsed_signal.symbol,
+        timeframe=parsed_signal.timeframe,
+        direction=parsed_signal.direction,
+        confidence=parsed_signal.confidence,
+        blockers=blockers,
+        reasons=reasons,
+        sizing=sizing_plan.model_dump(mode="json") if sizing_plan else None,
+        exposure=snapshot.model_dump(mode="json"),
+    )
