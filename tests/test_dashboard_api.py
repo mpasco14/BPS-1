@@ -58,3 +58,14 @@ def test_not_found_endpoint():
 
     assert status == 404
     assert b"not_found" in body
+
+
+def test_theme_endpoint():
+    status, body, content_type = route_dashboard_request(
+        "/dashboard/theme",
+        config=DashboardConfig(theme="professional"),
+    )
+
+    assert status == 200
+    assert content_type == "application/json"
+    assert b"professional" in body

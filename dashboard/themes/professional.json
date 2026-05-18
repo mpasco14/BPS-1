@@ -1,0 +1,15 @@
+{
+  "name": "professional",
+  "background": "#0f172a",
+  "surface": "#1e293b",
+  "surface_alt": "#111827",
+  "border": "#334155",
+  "text": "#e2e8f0",
+  "muted": "#94a3b8",
+  "good": "#22c55e",
+  "bad": "#ef4444",
+  "neutral": "#e2e8f0",
+  "accent": "#38bdf8",
+  "font_family": "Arial, sans-serif",
+  "card_radius": "16px"
+}

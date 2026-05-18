@@ -1,0 +1,15 @@
+{
+  "name": "dark",
+  "background": "#020617",
+  "surface": "#0f172a",
+  "surface_alt": "#020617",
+  "border": "#1e293b",
+  "text": "#f8fafc",
+  "muted": "#94a3b8",
+  "good": "#4ade80",
+  "bad": "#f87171",
+  "neutral": "#e2e8f0",
+  "accent": "#818cf8",
+  "font_family": "Arial, sans-serif",
+  "card_radius": "18px"
+}

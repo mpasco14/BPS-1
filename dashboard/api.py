@@ -19,6 +19,8 @@ from typing import Any
 from dashboard.config import DashboardConfig, dashboard_config_to_dict, load_dashboard_config
 from dashboard.metrics_builder import build_dashboard_summary
 from dashboard.schemas import HealthStatus
+from dashboard.templates import render_dashboard_html
+from dashboard.theme_loader import load_theme_for_config
 
 
 def json_response(payload: dict[str, Any], status: int = 200) -> tuple[int, bytes, str]:
@@ -30,109 +32,7 @@ def html_response(payload: str, status: int = 200) -> tuple[int, bytes, str]:
 
 
 def build_index_html(config: DashboardConfig) -> str:
-    refresh_ms = config.refresh_seconds * 1000
-
-    return f"""
-<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8" />
-  <title>BTC Binance Futures Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body {{
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-    }}
-    header {{
-      padding: 24px;
-      background: #111827;
-      border-bottom: 1px solid #334155;
-    }}
-    main {{
-      padding: 24px;
-      display: grid;
-      gap: 16px;
-    }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-    }}
-    .card {{
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 16px;
-      padding: 16px;
-    }}
-    .label {{
-      color: #94a3b8;
-      font-size: 14px;
-    }}
-    .value {{
-      font-size: 26px;
-      font-weight: 700;
-      margin-top: 8px;
-    }}
-    .good {{ color: #22c55e; }}
-    .bad {{ color: #ef4444; }}
-    .neutral {{ color: #e2e8f0; }}
-    pre {{
-      background: #020617;
-      padding: 16px;
-      border-radius: 12px;
-      overflow: auto;
-    }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>BTC Binance Futures Dashboard</h1>
-    <p>Atualização a cada {config.refresh_seconds}s — tema: {config.theme}</p>
-  </header>
-
-  <main>
-    <section>
-      <h2>Resumo</h2>
-      <div id="cards" class="grid"></div>
-    </section>
-
-    <section>
-      <h2>Últimos trades</h2>
-      <pre id="trades">Carregando...</pre>
-    </section>
-  </main>
-
-  <script>
-    async function refresh() {{
-      const response = await fetch('/dashboard/summary');
-      const data = await response.json();
-
-      const cards = [];
-      for (const section of ['paper_trading', 'full_backtest', 'calibration']) {{
-        const payload = data[section];
-        if (!payload || !payload.cards) continue;
-        cards.push(...payload.cards);
-      }}
-
-      document.getElementById('cards').innerHTML = cards.map(card => `
-        <div class="card">
-          <div class="label">${{card.label}}</div>
-          <div class="value ${{card.status}}">${{card.value ?? 'N/A'}} ${{card.unit ?? ''}}</div>
-        </div>
-      `).join('');
-
-      document.getElementById('trades').textContent = JSON.stringify(data.recent_trades || [], null, 2);
-    }}
-
-    refresh();
-    setInterval(refresh, {refresh_ms});
-  </script>
-</body>
-</html>
-"""
+    return render_dashboard_html(config)
 
 
 def route_dashboard_request(
@@ -154,6 +54,9 @@ def route_dashboard_request(
 
     if clean_path == "/dashboard/config":
         return json_response(dashboard_config_to_dict(resolved_config))
+
+    if clean_path == "/dashboard/theme":
+        return json_response(load_theme_for_config(resolved_config))
 
     summary = build_dashboard_summary(resolved_config)
     summary_payload = summary.model_dump(mode="json")
