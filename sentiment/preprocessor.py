@@ -2958,6 +2958,9 @@ def clean_raw_item(
     symbols = raw.symbols or extract_symbols(clean_text)
     relevance = relevance_score(clean_text, resolved_config.target_asset)
 
+    if resolved_config.target_asset in symbols:
+        relevance = min(1.0, relevance + 0.25)
+
     is_duplicate = item_hash in seen_hashes if seen_hashes is not None else False
 
     if seen_hashes is not None:
