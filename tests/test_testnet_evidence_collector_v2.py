@@ -27,3 +27,16 @@ def test_testnet_evidence_collector_blocks_missing_final_flat():
 
     assert report.passed is False
     assert "final_position_not_flat" in report.blockers
+
+    def test_testnet_evidence_export_accepts_dict(tmp_path):
+    report = collect_testnet_evidence(
+        events=build_demo_testnet_evidence_events(session_name="unit_export_dict")
+    )
+
+    path = export_testnet_evidence_collection_report(
+        report.model_dump(mode="json"),
+        output_dir=tmp_path,
+        name="evidence_from_dict",
+    )
+
+    assert path.exists()
