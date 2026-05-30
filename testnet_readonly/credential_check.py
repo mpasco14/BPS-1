@@ -46,6 +46,8 @@ class RealTestnetCredentialCheckReport(BaseModel):
 
     api_key_present: bool
     api_secret_present: bool
+    api_key_placeholder: bool = False
+    api_secret_placeholder: bool = False
 
     rest_base_url: str
     testnet_endpoint: bool
@@ -85,8 +87,46 @@ def readonly_live_flags_detected() -> bool:
             env_bool("BINANCE_ALLOW_LIVE_TRADING", False),
             env_bool("RISK_ALLOW_LIVE_TRADING", False),
             env_bool("LIVE_ORDER_ADAPTER_ALLOW_SUBMISSION", False),
+            env_bool("LIVE_ORDER_ADAPTER_ALLOW_LIVE_SUBMISSION", False),
         ]
     )
+
+
+def is_placeholder_secret(value: str | None) -> bool:
+    if not value:
+        return False
+
+    normalized = value.strip().upper()
+
+    placeholders = {
+        "COLE_SUA_API_KEY_TESTNET_AQUI",
+        "COLE_SUA_SECRET_KEY_TESTNET_AQUI",
+        "SUA_KEY_TESTNET",
+        "SEU_SECRET_TESTNET",
+        "SUA_API_KEY_TESTNET",
+        "SUA_SECRET_KEY_TESTNET",
+        "YOUR_API_KEY",
+        "YOUR_API_SECRET",
+        "YOUR_KEY_HERE",
+        "YOUR_SECRET_HERE",
+        "CHANGE_ME",
+        "CHANGEME",
+        "***",
+    }
+
+    return normalized in placeholders
+
+
+def mask_adapter_config(config: dict[str, Any]) -> dict[str, Any]:
+    masked = dict(config)
+
+    if masked.get("api_key"):
+        masked["api_key"] = "***"
+
+    if masked.get("api_secret"):
+        masked["api_secret"] = "***"
+
+    return masked
 
 
 def evaluate_real_testnet_credential_check(
@@ -103,8 +143,12 @@ def evaluate_real_testnet_credential_check(
     warnings: list[str] = []
     recommendations: list[str] = []
 
-    api_key_present = bool(resolved_adapter.api_key)
-    api_secret_present = bool(resolved_adapter.api_secret)
+    api_key_present = bool((resolved_adapter.api_key or "").strip())
+    api_secret_present = bool((resolved_adapter.api_secret or "").strip())
+
+    api_key_placeholder = is_placeholder_secret(resolved_adapter.api_key)
+    api_secret_placeholder = is_placeholder_secret(resolved_adapter.api_secret)
+
     testnet_endpoint = endpoint_is_testnet(resolved_adapter.rest_base_url)
     live_flags = readonly_live_flags_detected()
 
@@ -123,6 +167,12 @@ def evaluate_real_testnet_credential_check(
     if not resolved_adapter.simulate and not api_secret_present:
         blockers.append("api_secret_required_for_real_readonly")
 
+    if api_key_placeholder:
+        blockers.append("api_key_placeholder_detected")
+
+    if api_secret_placeholder:
+        blockers.append("api_secret_placeholder_detected")
+
     if resolved_adapter.simulate:
         warnings.append("adapter_is_simulated")
         recommendations.append("Para leitura real, definir BINANCE_TESTNET_SIMULATE=false com credenciais de testnet.")
@@ -138,6 +188,8 @@ def evaluate_real_testnet_credential_check(
 
     recommendations.append("Manter ordem e cancelamento desabilitados durante validação read-only.")
     recommendations.append("Nunca commitar .env com API key/secret.")
+    recommendations.append("Não usar placeholders como credenciais de testnet.")
+    recommendations.append("Nunca exportar api_key/api_secret em artifacts.")
 
     passed = not blockers
 
@@ -148,15 +200,17 @@ def evaluate_real_testnet_credential_check(
         adapter_simulate=resolved_adapter.simulate,
         api_key_present=api_key_present,
         api_secret_present=api_secret_present,
+        api_key_placeholder=api_key_placeholder,
+        api_secret_placeholder=api_secret_placeholder,
         rest_base_url=resolved_adapter.rest_base_url,
         testnet_endpoint=testnet_endpoint,
         live_flags_detected=live_flags,
         order_submission_allowed=resolved_adapter.allow_order_submission,
         cancel_orders_allowed=resolved_adapter.allow_cancel_orders,
-        blockers=blockers,
-        warnings=warnings,
+        blockers=sorted(set(blockers)),
+        warnings=sorted(set(warnings)),
         recommendations=sorted(set(recommendations)),
-        adapter_config=resolved_adapter.model_dump(mode="json"),
+        adapter_config=mask_adapter_config(resolved_adapter.model_dump(mode="json")),
         config=resolved_config.model_dump(mode="json"),
     )
 

@@ -14,8 +14,8 @@ from typing import Any, Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
-
-from binance_testnet_adapter.api_error import BinanceAPIErrorClassification, classify_binance_api_error
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
+from binance_testnet_adapter.api_error import classify_binance_api_error
 
 
 load_dotenv()
@@ -80,6 +80,8 @@ class BinanceSignedResponse(BaseModel):
     simulated: bool = False
     blocked_reason: str | None = None
 
+    config: dict[str, Any] = Field(default_factory=dict)
+
 
 def env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -119,6 +121,47 @@ def endpoint_is_testnet(base_url: str) -> bool:
 
     return "demo-fapi" in normalized or "testnet" in normalized
 
+def sanitized_config(self) -> dict[str, Any]:
+    return sanitize_artifact_payload(self.config.model_dump(mode="json"))
+
+def mask_sensitive_config(config: dict[str, Any]) -> dict[str, Any]:
+    masked = dict(config)
+
+    if masked.get("api_key"):
+        masked["api_key"] = "***"
+
+    if masked.get("api_secret"):
+        masked["api_secret"] = "***"
+
+    return masked
+
+
+def mask_sensitive_url(url: str | None) -> str | None:
+    if not url:
+        return url
+
+    parsed = urllib.parse.urlsplit(url)
+    query_items = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+
+    masked_items: list[tuple[str, str]] = []
+    for key, value in query_items:
+        if key.lower() == "signature":
+            masked_items.append((key, "***"))
+        else:
+            masked_items.append((key, value))
+
+    masked_query = urllib.parse.urlencode(masked_items, doseq=True)
+
+    return urllib.parse.urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            masked_query,
+            parsed.fragment,
+        )
+    )
+
 
 def build_query_string(params: dict[str, Any]) -> str:
     clean_params = {
@@ -141,6 +184,9 @@ def sign_query_string(query_string: str, api_secret: str) -> str:
 class BinanceTestnetSignedClient:
     def __init__(self, config: BinanceTestnetAdapterConfig | None = None) -> None:
         self.config = config or load_binance_testnet_adapter_config()
+
+    def sanitized_config(self) -> dict[str, Any]:
+        return mask_sensitive_config(self.config.model_dump(mode="json"))
 
     def build_signed_params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
         resolved_params = dict(params or {})
@@ -185,9 +231,10 @@ class BinanceTestnetSignedClient:
                 ok=True,
                 method=normalized_method,
                 path=normalized_path,
-                url=f"{self.config.rest_base_url}{normalized_path}",
+                url=mask_sensitive_url(f"{self.config.rest_base_url}{normalized_path}"),
                 data=simulate_data if simulate_data is not None else {"simulated": True},
                 simulated=True,
+                config=self.sanitized_config(),
             )
 
         blocked_reason = self.validate_request_safety(signed=signed)
@@ -198,8 +245,9 @@ class BinanceTestnetSignedClient:
                 ok=False,
                 method=normalized_method,
                 path=normalized_path,
-                url=f"{self.config.rest_base_url}{normalized_path}",
+                url=mask_sensitive_url(f"{self.config.rest_base_url}{normalized_path}"),
                 blocked_reason=blocked_reason,
+                config=self.sanitized_config(),
             )
 
         final_params = self.build_signed_params(params) if signed else dict(params or {})
@@ -223,6 +271,8 @@ class BinanceTestnetSignedClient:
             method=normalized_method,
         )
 
+        exported_url = mask_sensitive_url(url)
+
         try:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
                 body = response.read().decode("utf-8")
@@ -233,11 +283,12 @@ class BinanceTestnetSignedClient:
                     ok=True,
                     method=normalized_method,
                     path=normalized_path,
-                    url=url,
+                    url=exported_url,
                     http_status=response.status,
                     data=payload,
                     headers=dict(response.headers),
                     simulated=False,
+                    config=self.sanitized_config(),
                 )
 
         except urllib.error.HTTPError as exc:
@@ -265,13 +316,14 @@ class BinanceTestnetSignedClient:
                 ok=False,
                 method=normalized_method,
                 path=normalized_path,
-                url=url,
+                url=exported_url,
                 http_status=exc.code,
                 data=payload,
                 headers=dict(exc.headers),
                 error_code=error_code,
                 error_message=error_message,
                 error_classification=classification.model_dump(mode="json"),
+                config=self.sanitized_config(),
             )
 
         except OSError as exc:
@@ -285,9 +337,10 @@ class BinanceTestnetSignedClient:
                 ok=False,
                 method=normalized_method,
                 path=normalized_path,
-                url=url,
+                url=exported_url,
                 error_message=str(exc),
                 error_classification=classification.model_dump(mode="json"),
+                config=self.sanitized_config(),
             )
 
 

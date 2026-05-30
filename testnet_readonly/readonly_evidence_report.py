@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -229,18 +229,22 @@ def run_readonly_testnet_validation(
 
 
 def export_readonly_testnet_evidence_report(
-    report: ReadOnlyTestnetEvidenceReport,
+    report,
     *,
-    output_dir: str | Path | None = None,
+    output_dir=None,
     name: str = "readonly_testnet_evidence_report",
-) -> Path:
+):
     config = load_readonly_testnet_evidence_config()
     path = Path(output_dir or config.output_dir)
     path.mkdir(parents=True, exist_ok=True)
 
     output_path = path / f"{name}.json"
+
+    data = report.model_dump(mode="json") if hasattr(report, "model_dump") else report
+    data = sanitize_artifact_payload(data)
+
     output_path.write_text(
-        json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

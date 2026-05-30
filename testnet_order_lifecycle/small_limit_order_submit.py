@@ -8,7 +8,7 @@ from binance_testnet_adapter.order_submit import (
     BinanceTestnetOrderSubmitReport,
     submit_binance_testnet_order,
 )
-from binance_testnet_adapter.signed_client import BinanceTestnetAdapterConfig
+from binance_testnet_adapter.signed_client import load_binance_testnet_adapter_config
 from testnet_order_lifecycle.lifecycle_models import (
     TestnetOrderLifecycleConfig,
     export_lifecycle_json,
@@ -46,10 +46,13 @@ def submit_real_testnet_small_limit_order(
 
     dry_run = resolved.simulate if force_dry_run is None else force_dry_run
 
-    adapter_config = BinanceTestnetAdapterConfig(
-        simulate=resolved.simulate,
-        allow_order_submission=resolved.allow_real_submit,
-        allow_cancel_orders=resolved.allow_real_cancel,
+    base_adapter_config = load_binance_testnet_adapter_config()
+    adapter_config = base_adapter_config.model_copy(
+        update={
+            "simulate": resolved.simulate,
+            "allow_order_submission": resolved.allow_real_submit,
+            "allow_cancel_orders": resolved.allow_real_cancel,
+        }
     )
 
     return submit_binance_testnet_order(
@@ -75,6 +78,10 @@ def export_small_limit_order_submit_report(
 ) -> Path:
     return export_lifecycle_json(
         report,
-        output_dir=output_dir or os.getenv("TESTNET_ORDER_LIFECYCLE_SUBMIT_OUTPUT_DIR", "artifacts/testnet_order_lifecycle"),
+        output_dir=output_dir
+        or os.getenv(
+            "TESTNET_ORDER_LIFECYCLE_SUBMIT_OUTPUT_DIR",
+            "artifacts/testnet_order_lifecycle",
+        ),
         name=name,
     )

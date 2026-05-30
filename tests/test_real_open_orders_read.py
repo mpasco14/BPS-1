@@ -18,13 +18,23 @@ class FakeOpenOrdersClient(BinanceTestnetSignedClient):
         )
 
 
+from binance_testnet_adapter.signed_client import BinanceTestnetAdapterConfig
+from testnet_readonly.open_orders_read import read_real_testnet_open_orders
+
+
 def test_real_open_orders_read_empty_passes():
-    report = read_real_testnet_open_orders(symbol="BTCUSDT")
+    report = read_real_testnet_open_orders(
+        symbol="BTCUSDT",
+        adapter_config=BinanceTestnetAdapterConfig(
+            simulate=True,
+            allow_order_submission=False,
+            allow_cancel_orders=False,
+        ),
+    )
 
     assert report.passed is True
     assert report.simulated is True
     assert report.open_orders_count == 0
-
 
 def test_real_open_orders_read_blocks_when_orders_present():
     client = FakeOpenOrdersClient(

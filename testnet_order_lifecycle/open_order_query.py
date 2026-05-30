@@ -8,7 +8,9 @@ from binance_testnet_adapter.order_cancel import (
     BinanceTestnetOrderQueryReport,
     query_binance_testnet_open_order,
 )
-from binance_testnet_adapter.signed_client import BinanceTestnetAdapterConfig
+from binance_testnet_adapter.signed_client import (
+    load_binance_testnet_adapter_config,
+)
 from testnet_order_lifecycle.lifecycle_models import (
     TestnetOrderLifecycleConfig,
     export_lifecycle_json,
@@ -24,12 +26,14 @@ def query_real_testnet_open_order(
 ) -> BinanceTestnetOrderQueryReport:
     resolved = config or load_testnet_order_lifecycle_config()
 
-    adapter_config = BinanceTestnetAdapterConfig(
-        simulate=resolved.simulate,
-        allow_order_submission=resolved.allow_real_submit,
-        allow_cancel_orders=resolved.allow_real_cancel,
+    base_adapter_config = load_binance_testnet_adapter_config()
+    adapter_config = base_adapter_config.model_copy(
+        update={
+            "simulate": resolved.simulate,
+            "allow_order_submission": resolved.allow_real_submit,
+            "allow_cancel_orders": resolved.allow_real_cancel,
+        }
     )
-
     return query_binance_testnet_open_order(
         request=BinanceTestnetCancelOrderRequest(
             symbol=resolved.symbol,

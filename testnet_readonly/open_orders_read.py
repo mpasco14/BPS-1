@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 from pydantic import BaseModel, ConfigDict, Field
 
 from binance_testnet_adapter.signed_client import (
@@ -160,7 +160,7 @@ def read_real_testnet_open_orders(
         open_orders=[item.model_dump(mode="json") for item in orders],
         raw_response=response.data,
         response=response.model_dump(mode="json"),
-        config=resolved_config.model_dump(mode="json"),
+        config=sanitize_artifact_payload(resolved_config.model_dump(mode="json"))       
     )
 
 
