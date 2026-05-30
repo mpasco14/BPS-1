@@ -41,7 +41,7 @@ def submit_real_testnet_small_limit_order(
             },
             blockers=blockers,
             warnings=[],
-            config=resolved.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved.model_dump(mode="json")),
         )
 
     dry_run = resolved.simulate if force_dry_run is None else force_dry_run

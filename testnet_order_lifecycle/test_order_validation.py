@@ -40,7 +40,7 @@ def validate_real_testnet_test_order(
             },
             blockers=blockers,
             warnings=[],
-            config=resolved.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved.model_dump(mode="json")),
         )
 
     base_adapter_config = load_binance_testnet_adapter_config()

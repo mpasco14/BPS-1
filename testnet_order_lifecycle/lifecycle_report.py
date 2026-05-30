@@ -64,7 +64,7 @@ def build_real_testnet_lifecycle_report(
                 "Manter live flags desligadas.",
             ],
             events=[],
-            config=resolved.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved.model_dump(mode="json")),
         )
 
     test_order = validate_real_testnet_test_order(config=resolved)
@@ -260,7 +260,7 @@ def build_real_testnet_lifecycle_report(
         cancel=cancel.model_dump(mode="json") if cancel else None,
         fill_capture=fill_capture.model_dump(mode="json") if fill_capture else None,
         position_reconciliation=position_recon.model_dump(mode="json") if position_recon else None,
-        config=resolved.model_dump(mode="json"),
+        config=sanitize_artifact_payload(resolved.model_dump(mode="json")),
     )
 
 

@@ -215,3 +215,198 @@ def export_campaign_json(
     )
 
     return output_path
+
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, Field
+
+
+load_dotenv()
+
+__test__ = False
+
+
+CampaignStatus = Literal["PASS", "WARN", "FAIL", "BLOCKED"]
+CampaignDecision = Literal["PROMOTE", "HOLD", "BLOCKED"]
+
+
+class LongTestnetCampaignConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    output_dir: Path = Path("artifacts/testnet_campaign")
+
+    campaign_name: str = "real_testnet_campaign_30min"
+    symbol: str = "BTCUSDT"
+
+    duration_minutes: int = 30
+    interval_seconds: int = 600
+    max_iterations: int = 3
+
+    quantity: float = 0.001
+    price: float = 60000.0
+
+    require_real_mode: bool = True
+    require_submit: bool = True
+    require_cancel: bool = True
+    require_final_flat: bool = True
+    require_no_rejection: bool = True
+
+    max_failed_iterations: int = 0
+    max_warning_iterations: int = 99
+
+    allow_real_submit: bool = True
+    allow_real_cancel: bool = True
+
+
+class CampaignIterationResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    iteration: int
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = None
+
+    command: list[str] = Field(default_factory=list)
+
+    status: str = "UNKNOWN"
+    passed: bool = False
+    simulated: bool = True
+
+    submitted: bool = False
+    cancel_passed: bool = False
+    final_flat: bool = False
+    rejection_detected: bool = False
+    fill_detected: bool = False
+
+    artifact_path: str | None = None
+    return_code: int | None = None
+
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LongTestnetCampaignReport(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    source: str = "long_real_testnet_campaign"
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    campaign_name: str
+    symbol: str
+
+    status: CampaignStatus
+    passed: bool
+    decision: CampaignDecision
+
+    duration_minutes: int
+    interval_seconds: int
+    max_iterations: int
+
+    iterations_count: int
+    passed_iterations: int
+    failed_iterations: int
+    warning_iterations: int
+
+    submitted_count: int
+    cancel_passed_count: int
+    final_flat_count: int
+    rejection_count: int
+    fill_count: int
+
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+    iterations: list[CampaignIterationResult] = Field(default_factory=list)
+
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def load_long_testnet_campaign_config() -> LongTestnetCampaignConfig:
+    return LongTestnetCampaignConfig(
+        output_dir=Path(os.getenv("TESTNET_CAMPAIGN_OUTPUT_DIR", "artifacts/testnet_campaign")),
+        campaign_name=os.getenv("TESTNET_CAMPAIGN_NAME", "real_testnet_campaign_30min"),
+        symbol=os.getenv("TESTNET_CAMPAIGN_SYMBOL", "BTCUSDT"),
+        duration_minutes=env_int("TESTNET_CAMPAIGN_DURATION_MINUTES", 30),
+        interval_seconds=env_int("TESTNET_CAMPAIGN_INTERVAL_SECONDS", 600),
+        max_iterations=env_int("TESTNET_CAMPAIGN_MAX_ITERATIONS", 3),
+        quantity=env_float("TESTNET_CAMPAIGN_QUANTITY", 0.001),
+        price=env_float("TESTNET_CAMPAIGN_PRICE", 60000.0),
+        require_real_mode=env_bool("TESTNET_CAMPAIGN_REQUIRE_REAL_MODE", True),
+        require_submit=env_bool("TESTNET_CAMPAIGN_REQUIRE_SUBMIT", True),
+        require_cancel=env_bool("TESTNET_CAMPAIGN_REQUIRE_CANCEL", True),
+        require_final_flat=env_bool("TESTNET_CAMPAIGN_REQUIRE_FINAL_FLAT", True),
+        require_no_rejection=env_bool("TESTNET_CAMPAIGN_REQUIRE_NO_REJECTION", True),
+        max_failed_iterations=env_int("TESTNET_CAMPAIGN_MAX_FAILED_ITERATIONS", 0),
+        max_warning_iterations=env_int("TESTNET_CAMPAIGN_MAX_WARNING_ITERATIONS", 99),
+        allow_real_submit=env_bool("TESTNET_CAMPAIGN_ALLOW_REAL_SUBMIT", True),
+        allow_real_cancel=env_bool("TESTNET_CAMPAIGN_ALLOW_REAL_CANCEL", True),
+    )
+
+
+def export_campaign_json(
+    payload: BaseModel | dict[str, Any],
+    *,
+    output_dir: str | Path | None = None,
+    name: str,
+) -> Path:
+    config = load_long_testnet_campaign_config()
+    path = Path(output_dir or config.output_dir)
+    path.mkdir(parents=True, exist_ok=True)
+
+    output_path = path / f"{name}.json"
+
+    data = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
+
+    try:
+        from binance_testnet_adapter.sanitization import sanitize_artifact_payload
+
+        data = sanitize_artifact_payload(data)
+    except Exception:
+        pass
+
+    output_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return output_path
