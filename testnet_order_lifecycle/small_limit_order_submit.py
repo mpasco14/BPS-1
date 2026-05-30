@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from binance_testnet_adapter.order_submit import (
+    BinanceTestnetOrderSubmitRequest,
+    BinanceTestnetOrderSubmitReport,
+    submit_binance_testnet_order,
+)
+from binance_testnet_adapter.signed_client import BinanceTestnetAdapterConfig
+from testnet_order_lifecycle.lifecycle_models import (
+    TestnetOrderLifecycleConfig,
+    export_lifecycle_json,
+    load_testnet_order_lifecycle_config,
+    validate_lifecycle_config,
+)
+
+
+def submit_real_testnet_small_limit_order(
+    *,
+    config: TestnetOrderLifecycleConfig | None = None,
+    force_dry_run: bool | None = None,
+) -> BinanceTestnetOrderSubmitReport:
+    resolved = config or load_testnet_order_lifecycle_config()
+    blockers = validate_lifecycle_config(resolved)
+
+    if blockers:
+        return BinanceTestnetOrderSubmitReport(
+            status="BLOCKED",
+            passed=False,
+            submitted=False,
+            dry_run=True,
+            simulated=resolved.simulate,
+            request={
+                "symbol": resolved.symbol,
+                "side": resolved.side,
+                "order_type": "LIMIT",
+                "quantity": resolved.quantity,
+                "price": resolved.price,
+            },
+            blockers=blockers,
+            warnings=[],
+            config=resolved.model_dump(mode="json"),
+        )
+
+    dry_run = resolved.simulate if force_dry_run is None else force_dry_run
+
+    adapter_config = BinanceTestnetAdapterConfig(
+        simulate=resolved.simulate,
+        allow_order_submission=resolved.allow_real_submit,
+        allow_cancel_orders=resolved.allow_real_cancel,
+    )
+
+    return submit_binance_testnet_order(
+        request=BinanceTestnetOrderSubmitRequest(
+            symbol=resolved.symbol,
+            side=resolved.side,
+            order_type="LIMIT",
+            quantity=resolved.quantity,
+            price=resolved.price,
+            time_in_force=resolved.time_in_force,
+            dry_run=dry_run,
+            validate_on_exchange=False,
+        ),
+        config=adapter_config,
+    )
+
+
+def export_small_limit_order_submit_report(
+    report: BinanceTestnetOrderSubmitReport,
+    *,
+    output_dir: str | Path | None = None,
+    name: str = "real_testnet_small_limit_order_submit",
+) -> Path:
+    return export_lifecycle_json(
+        report,
+        output_dir=output_dir or os.getenv("TESTNET_ORDER_LIFECYCLE_SUBMIT_OUTPUT_DIR", "artifacts/testnet_order_lifecycle"),
+        name=name,
+    )
