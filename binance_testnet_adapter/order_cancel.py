@@ -1,11 +1,11 @@
 from __future__ import annotations
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 from pydantic import BaseModel, ConfigDict, Field
 
 from binance_testnet_adapter.signed_client import (
@@ -109,7 +109,7 @@ def query_binance_testnet_open_order(
             simulated=resolved_config.simulate,
             request=parsed_request.model_dump(mode="json"),
             blockers=blockers,
-            config=resolved_config.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
         )
 
     response = resolved_client.request(
@@ -133,7 +133,7 @@ def query_binance_testnet_open_order(
         response=response.model_dump(mode="json"),
         blockers=[] if response.ok else ["open_order_query_failed"],
         warnings=[],
-        config=resolved_config.model_dump(mode="json"),
+        config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
     )
 
 
@@ -161,7 +161,7 @@ def cancel_binance_testnet_order(
             simulated=resolved_config.simulate,
             request=parsed_request.model_dump(mode="json"),
             blockers=blockers,
-            config=resolved_config.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
         )
 
     if not resolved_config.allow_cancel_orders:
@@ -173,7 +173,7 @@ def cancel_binance_testnet_order(
             request=parsed_request.model_dump(mode="json"),
             blockers=["testnet_cancel_orders_not_allowed"],
             warnings=["enable_BINANCE_TESTNET_ALLOW_CANCEL_ORDERS_only_for_supervised_testnet"],
-            config=resolved_config.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
         )
 
     response = resolved_client.request(
@@ -198,7 +198,7 @@ def cancel_binance_testnet_order(
         response=response.model_dump(mode="json"),
         blockers=[] if response.ok else ["cancel_order_failed"],
         warnings=[],
-        config=resolved_config.model_dump(mode="json"),
+        config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
     )
 
 

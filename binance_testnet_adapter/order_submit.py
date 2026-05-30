@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 import json
 import os
 from datetime import datetime, timezone
@@ -131,7 +131,7 @@ def submit_binance_testnet_order(
             request=parsed_request.model_dump(mode="json"),
             blockers=blockers,
             warnings=warnings,
-            config=resolved_config.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
         )
 
     params = build_order_params(parsed_request)
@@ -147,7 +147,7 @@ def submit_binance_testnet_order(
             endpoint=None,
             response={"dry_run": True, "params": params},
             warnings=["order_not_sent_dry_run"],
-            config=resolved_config.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
         )
 
     if parsed_request.dry_run and parsed_request.validate_on_exchange:
@@ -170,7 +170,7 @@ def submit_binance_testnet_order(
             response=response.model_dump(mode="json"),
             blockers=[] if response.ok else ["test_order_validation_failed"],
             warnings=["test_order_validation_only_no_matching_engine_submission"],
-            config=resolved_config.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
         )
 
     if not resolved_config.allow_order_submission:
@@ -184,7 +184,7 @@ def submit_binance_testnet_order(
             endpoint="/fapi/v1/order",
             blockers=["testnet_order_submission_not_allowed"],
             warnings=["enable_BINANCE_TESTNET_ALLOW_ORDER_SUBMISSION_only_for_supervised_testnet"],
-            config=resolved_config.model_dump(mode="json"),
+            config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
         )
 
     response = resolved_client.request(
@@ -215,7 +215,7 @@ def submit_binance_testnet_order(
         response=response.model_dump(mode="json"),
         blockers=[] if response.ok else ["order_submission_failed"],
         warnings=warnings,
-        config=resolved_config.model_dump(mode="json"),
+        config=sanitize_artifact_payload(resolved_config.model_dump(mode="json")),
     )
 
 

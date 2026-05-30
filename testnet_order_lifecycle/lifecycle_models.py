@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -202,18 +202,21 @@ def validate_lifecycle_config(config: TestnetOrderLifecycleConfig) -> list[str]:
 
 
 def export_lifecycle_json(
-    payload: BaseModel | dict[str, Any],
+    payload,
     *,
     output_dir: str | Path | None = None,
     name: str,
 ) -> Path:
     config = load_testnet_order_lifecycle_config()
+
     path = Path(output_dir or config.output_dir)
     path.mkdir(parents=True, exist_ok=True)
 
-    data = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
-
     output_path = path / f"{name}.json"
+
+    data = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+    data = sanitize_artifact_payload(data)
+
     output_path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",

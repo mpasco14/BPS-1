@@ -1,9 +1,9 @@
 from __future__ import annotations
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 import os
 from pathlib import Path
 from typing import Any
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 from binance_testnet_adapter.account_snapshot import fetch_binance_testnet_account_snapshot
 from binance_testnet_adapter.position_reconciliation import reconcile_binance_testnet_position
 from testnet_order_lifecycle.cancel_order import cancel_real_testnet_order

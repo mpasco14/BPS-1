@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from binance_testnet_adapter.sanitization import sanitize_artifact_payload
 import os
 from pathlib import Path
 
