@@ -134,6 +134,9 @@ def build_campaign_report(
     if iterations_count == 0:
         blockers.append("no_iterations_executed")
 
+    if iterations_count < config.max_iterations:
+        blockers.append("campaign_incomplete")
+
     if failed_iterations > config.max_failed_iterations:
         blockers.append("failed_iterations_above_limit")
 
@@ -213,21 +216,45 @@ def run_long_testnet_campaign(
     resolved = config or load_long_testnet_campaign_config()
     iterations: list[CampaignIterationResult] = []
 
-    for index in range(1, resolved.max_iterations + 1):
-        iteration = run_campaign_iteration(
-            iteration=index,
-            config=resolved,
-        )
-        iterations.append(iteration)
+    try:
+        for index in range(1, resolved.max_iterations + 1):
+            print(
+                f"[campaign] starting iteration {index}/{resolved.max_iterations} "
+                f"name={resolved.campaign_name} symbol={resolved.symbol}",
+                flush=True,
+            )
 
-        if sleep_between_iterations and index < resolved.max_iterations:
-            time.sleep(resolved.interval_seconds)
+            iteration = run_campaign_iteration(
+                iteration=index,
+                config=resolved,
+            )
+            iterations.append(iteration)
+
+            print(
+                f"[campaign] finished iteration {index}/{resolved.max_iterations} "
+                f"passed={iteration.passed} status={iteration.status} "
+                f"submitted={iteration.submitted} cancel_passed={iteration.cancel_passed} "
+                f"final_flat={iteration.final_flat} blockers={iteration.blockers} warnings={iteration.warnings}",
+                flush=True,
+            )
+
+            if sleep_between_iterations and index < resolved.max_iterations:
+                print(
+                    f"[campaign] sleeping {resolved.interval_seconds}s before next iteration",
+                    flush=True,
+                )
+                time.sleep(resolved.interval_seconds)
+
+    except KeyboardInterrupt:
+        print(
+            "[campaign] interrupted by operator. Building partial BLOCKED report.",
+            flush=True,
+        )
 
     return build_campaign_report(
         iterations=iterations,
         config=resolved,
     )
-
 
 def export_long_testnet_campaign_report(
     report: LongTestnetCampaignReport,
