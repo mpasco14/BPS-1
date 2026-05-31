@@ -162,3 +162,15 @@ def export_real_position_snapshot_read_report(
     )
 
     return output_path
+
+def export_real_testnet_position_snapshot_read_report(
+    report: RealPositionSnapshotReadReport | dict[str, Any],
+    *,
+    output_dir: str | Path | None = None,
+    name: str = "real_testnet_position_snapshot_read",
+) -> Path:
+    return export_real_position_snapshot_read_report(
+        report,
+        output_dir=output_dir,
+        name=name,
+    )
