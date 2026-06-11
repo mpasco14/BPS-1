@@ -14,6 +14,8 @@ from spot_micro_live.phase33b import (
     build_spot_session_report,
     export_json,
     load_config,
+    run_spot_brl_filter_validation,
+    run_spot_brl_pair_discovery,
     run_spot_credential_permission_check,
     run_spot_dry_run_execution_contract,
     run_spot_kill_switch,
@@ -31,6 +33,8 @@ def parse_args() -> argparse.Namespace:
         choices=[
             "venue",
             "credential",
+            "pair-discovery",
+            "filters",
             "readonly",
             "dry-run",
             "small-order",
@@ -55,6 +59,12 @@ def main() -> int:
     elif args.mode == "credential":
         report = run_spot_credential_permission_check(config)
         name = args.name or "spot_credential_permission"
+    elif args.mode == "pair-discovery":
+        report = run_spot_brl_pair_discovery(config)
+        name = args.name or "spot_brl_pair_discovery"
+    elif args.mode == "filters":
+        report = run_spot_brl_filter_validation(config)
+        name = args.name or "spot_brl_filter_validation"  
     elif args.mode == "readonly":
         report = run_spot_readonly_snapshot(config)
         name = args.name or "spot_micro_live_readonly"

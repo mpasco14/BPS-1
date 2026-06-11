@@ -31,23 +31,27 @@ def test_spot_credential_blocks_withdrawal_permission():
 def test_spot_dry_run_blocks_notional_above_limit(tmp_path):
     phase32 = tmp_path / "phase32.json"
     readonly = tmp_path / "readonly.json"
+    filters = tmp_path / "filters.json"
 
     phase32.write_text('{"passed": true, "decision": "GO"}', encoding="utf-8")
     readonly.write_text('{"passed": true, "open_orders_count": 0}', encoding="utf-8")
+    filters.write_text('{"passed": true}', encoding="utf-8")
 
     report = run_spot_dry_run_execution_contract(
         SpotMicroLiveConfig(
             phase32_report_path=phase32,
             readonly_report_path=readonly,
+            filter_report_path=filters,
+            require_filter_validation_passed=True,
             quantity=1,
             price=60000,
-            max_order_notional_usd=10,
+            min_order_quote_amount=10,
+            max_order_quote_amount=20,
         )
     )
 
     assert report.passed is False
-    assert "notional_above_spot_micro_live_limit" in report.blockers
-
+    assert "notional_above_max_brl_limit" in report.blockers
 
 def test_spot_small_order_blocks_without_unlocks(tmp_path):
     phase32 = tmp_path / "phase32.json"
