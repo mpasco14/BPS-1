@@ -18,6 +18,7 @@ from spot_micro_live.phase35_controlled_exit import (
     export_json,
     load_phase35_config,
     run_controlled_fill_exit_plan,
+    run_kill_switch_residual_inventory,
 )
 
 
@@ -29,12 +30,13 @@ def main() -> int:
         "--mode",
         required=True,
         choices=[
-            "plan",
-            "accounting",
-            "policy",
-            "pnl",
-            "report",
-        ],
+        "plan",
+        "accounting",
+        "policy",
+        "pnl",
+        "kill-switch",
+        "report",
+],
     )
     parser.add_argument("--export", action="store_true")
     parser.add_argument("--name", default=None)
@@ -58,6 +60,10 @@ def main() -> int:
     elif args.mode == "pnl":
         report = build_fee_spread_pnl_reconciliation(config)
         name = args.name or "fee_spread_pnl_reconciliation"
+
+    elif args.mode == "kill-switch":
+        report = run_kill_switch_residual_inventory(config)
+        name = args.name or "kill_switch_residual_inventory"
 
     elif args.mode == "report":
         report = build_controlled_fill_session_report(config)

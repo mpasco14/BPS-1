@@ -16,6 +16,7 @@ from spot_micro_live.phase33b import (
     get_current_price,
     load_config as load_phase33b_config,
     load_json,
+    run_spot_kill_switch,
     run_spot_readonly_snapshot,
 )
 
@@ -46,6 +47,8 @@ class ControlledExitConfig(BaseModel):
     allow_real_sell: bool = False
     allow_cancel: bool = False
     confirmation_phrase: str = ""
+    allow_kill_switch: bool = False
+    kill_switch_confirmation_phrase: str = ""
 
     max_sell_base_qty: float = 0.00004
     min_expected_quote_brl: float = 10.0
@@ -64,6 +67,9 @@ class ControlledExitConfig(BaseModel):
         "artifacts/spot_controlled_exit/fee_spread_pnl_reconciliation.json"
     )
     session_report_path: Path = Path("artifacts/spot_controlled_exit/controlled_fill_session_report.json")
+    kill_switch_path: Path = Path(
+        "artifacts/spot_controlled_exit/kill_switch_residual_inventory.json"
+    )
 
 class Phase35GateReport(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -152,6 +158,31 @@ class FeeSpreadPnlReconciliationReport(Phase35GateReport):
     spread_buffer_pct: float
     min_net_pnl_brl: float
 
+class KillSwitchResidualInventoryReport(Phase35GateReport):
+    source: str = "spot_brl_kill_switch_residual_inventory"
+
+    symbol: str
+
+    attempted: bool
+    kill_switch_allowed: bool
+    kill_switch_passed: bool
+
+    base_free_before: float
+    base_locked_before: float
+    quote_free_before: float
+    quote_locked_before: float
+    open_orders_before: int
+
+    base_free_after: float
+    base_locked_after: float
+    quote_free_after: float
+    quote_locked_after: float
+    open_orders_after: int
+
+    residual_inventory_detected: bool
+    inventory_preserved: bool
+    real_sell_allowed: bool
+
 class ControlledFillSessionReport(Phase35GateReport):
     source: str = "spot_brl_controlled_fill_session_report"
 
@@ -159,6 +190,7 @@ class ControlledFillSessionReport(Phase35GateReport):
     accounting_passed: bool
     policy_passed: bool
     pnl_passed: bool
+    kill_switch_passed: bool
     real_sell_allowed: bool
     position_detected: bool
     open_orders_count: int
@@ -184,6 +216,11 @@ def load_phase35_config() -> ControlledExitConfig:
         allow_real_sell=env_bool("SPOT_CONTROLLED_EXIT_ALLOW_REAL_SELL", False),
         allow_cancel=env_bool("SPOT_CONTROLLED_EXIT_ALLOW_CANCEL", False),
         confirmation_phrase=os.getenv("SPOT_CONTROLLED_EXIT_CONFIRM_PHRASE", ""),
+        allow_kill_switch=env_bool("SPOT_CONTROLLED_EXIT_ALLOW_KILL_SWITCH", False),
+        kill_switch_confirmation_phrase=os.getenv(
+            "SPOT_CONTROLLED_EXIT_KILL_SWITCH_CONFIRM_PHRASE",
+            "",
+        ),
         fee_rate=env_float("SPOT_CONTROLLED_EXIT_FEE_RATE", 0.001),
         spread_buffer_pct=env_float("SPOT_CONTROLLED_EXIT_SPREAD_BUFFER_PCT", 0.002),
         min_net_pnl_brl=env_float("SPOT_CONTROLLED_EXIT_MIN_NET_PNL_BRL", 0.0),        plan_path=Path(
@@ -208,6 +245,12 @@ def load_phase35_config() -> ControlledExitConfig:
             os.getenv(
                 "SPOT_CONTROLLED_PNL_RECONCILIATION_PATH",
                 "artifacts/spot_controlled_exit/fee_spread_pnl_reconciliation.json",
+            )
+        ),
+        kill_switch_path=Path(
+            os.getenv(
+                "SPOT_CONTROLLED_KILL_SWITCH_PATH",
+                "artifacts/spot_controlled_exit/kill_switch_residual_inventory.json",
             )
         ),
         session_report_path=Path(
@@ -237,6 +280,26 @@ def locked_phase33b_config_for_phase35(config: ControlledExitConfig) -> SpotMicr
 
     return SpotMicroLiveConfig(**data)
 
+def kill_switch_phase33b_config_for_phase35(
+    config: ControlledExitConfig,
+) -> SpotMicroLiveConfig:
+    base = load_phase33b_config()
+    data = base.model_dump()
+
+    data.update(
+        {
+            "symbol": config.symbol,
+            "base_asset": config.base_asset,
+            "quote_asset": config.quote_asset,
+            "allow_real_order_submission": False,
+            "allow_real_cancel": bool(config.allow_kill_switch),
+            "allow_kill_switch": bool(config.allow_kill_switch),
+            "confirmation_phrase": "",
+            "spot_trading_enabled_declared": False,
+        }
+    )
+
+    return SpotMicroLiveConfig(**data)
 
 def safe_entry_avg_price(config: ControlledExitConfig) -> float:
     if config.entry_executed_qty <= 0:
@@ -515,6 +578,113 @@ def build_fee_spread_pnl_reconciliation(
         recommendations=sorted(set(recommendations)),
     )
 
+def run_kill_switch_residual_inventory(
+    config: ControlledExitConfig | None = None,
+) -> KillSwitchResidualInventoryReport:
+    resolved = config or load_phase35_config()
+
+    readonly_config = locked_phase33b_config_for_phase35(resolved)
+    before = run_spot_readonly_snapshot(readonly_config)
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    recommendations: list[str] = []
+
+    attempted = False
+    kill_switch_passed = False
+
+    if before.passed is not True:
+        blockers.append("readonly_before_kill_switch_not_passed")
+
+    if resolved.allow_real_sell:
+        blockers.append("real_sell_must_remain_disabled_for_kill_switch")
+
+    residual_inventory_detected = before.base_free > 0
+
+    if not residual_inventory_detected:
+        warnings.append("no_residual_inventory_detected")
+
+    if before.base_locked > 0 or before.quote_locked > 0:
+        blockers.append("locked_balance_detected_before_kill_switch")
+
+    if before.open_orders_count == 0:
+        recommendations.append("Nenhuma ordem aberta encontrada; kill switch permanece como validação de segurança.")
+
+    can_attempt = (
+        resolved.allow_kill_switch
+        and resolved.kill_switch_confirmation_phrase
+        == "I_ACCEPT_SPOT_CONTROLLED_EXIT_KILL_SWITCH_RISK"
+        and not blockers
+    )
+
+    if resolved.allow_kill_switch and not can_attempt:
+        blockers.append("kill_switch_confirmation_phrase_required")
+
+    after = before
+
+    if can_attempt:
+        attempted = True
+        kill_config = kill_switch_phase33b_config_for_phase35(resolved)
+        drill = run_spot_kill_switch(kill_config)
+
+        kill_switch_passed = drill.passed
+
+        if drill.passed is not True:
+            blockers.append("kill_switch_not_passed")
+
+        after = run_spot_readonly_snapshot(readonly_config)
+
+        if after.passed is not True:
+            blockers.append("readonly_after_kill_switch_not_passed")
+    else:
+        kill_switch_passed = before.passed and before.open_orders_count == 0
+
+    inventory_preserved = abs(after.base_free - before.base_free) <= 0.00000001
+
+    if not inventory_preserved:
+        blockers.append("residual_inventory_changed_during_kill_switch")
+
+    if after.open_orders_count != 0:
+        blockers.append("open_orders_remaining_after_kill_switch")
+
+    if after.base_locked > 0 or after.quote_locked > 0:
+        blockers.append("locked_balance_detected_after_kill_switch")
+
+    recommendations.append("Kill switch deve cancelar ordens abertas, não vender inventário BTC.")
+    recommendations.append("Venda residual deve ficar para etapa de exit dry-run/controlled sell.")
+    recommendations.append("Confirmar sempre open_orders=0 e locked balances=0 após o drill.")
+
+    passed = not blockers
+    status, decision = final_status(passed, warnings)
+
+    return KillSwitchResidualInventoryReport(
+        status=status,
+        passed=passed,
+        decision=decision,
+        symbol=resolved.symbol,
+        attempted=attempted,
+        kill_switch_allowed=resolved.allow_kill_switch,
+        kill_switch_passed=kill_switch_passed,
+        base_free_before=before.base_free,
+        base_locked_before=before.base_locked,
+        quote_free_before=before.quote_free,
+        quote_locked_before=before.quote_locked,
+        open_orders_before=before.open_orders_count,
+        base_free_after=after.base_free,
+        base_locked_after=after.base_locked,
+        quote_free_after=after.quote_free,
+        quote_locked_after=after.quote_locked,
+        open_orders_after=after.open_orders_count,
+        residual_inventory_detected=residual_inventory_detected,
+        inventory_preserved=inventory_preserved,
+        real_sell_allowed=resolved.allow_real_sell,
+        blockers=sorted(set(blockers)),
+        warnings=sorted(set(warnings)),
+        recommendations=sorted(set(recommendations)),
+
+    )
+
+
 def build_controlled_fill_session_report(
     config: ControlledExitConfig | None = None,
 ) -> ControlledFillSessionReport:
@@ -524,6 +694,7 @@ def build_controlled_fill_session_report(
     accounting = load_json(resolved.accounting_path)
     policy = load_json(resolved.policy_path)
     pnl = load_json(resolved.pnl_reconciliation_path)
+    kill_switch = load_json(resolved.kill_switch_path)
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -533,7 +704,7 @@ def build_controlled_fill_session_report(
     accounting_passed = accounting.get("passed") is True if accounting else False
     policy_passed = policy.get("passed") is True if policy else False
     pnl_passed = pnl.get("passed") is True if pnl else False
-
+    kill_switch_passed = kill_switch.get("passed") is True if kill_switch else False
     real_sell_allowed = policy.get("real_sell_allowed") is True if policy else False
     position_detected = plan.get("position_detected") is True if plan else False
     open_orders_count = int(plan.get("open_orders_count", 999)) if plan else 999
@@ -550,6 +721,9 @@ def build_controlled_fill_session_report(
 
     if not pnl_passed:
         blockers.append("pnl_reconciliation_not_passed")
+
+    if not kill_switch_passed:
+        blockers.append("kill_switch_residual_inventory_not_passed")
 
     if real_sell_allowed:
         blockers.append("real_sell_unexpectedly_enabled")
@@ -574,6 +748,7 @@ def build_controlled_fill_session_report(
         accounting_passed=accounting_passed,
         policy_passed=policy_passed,
         pnl_passed=pnl_passed,
+        kill_switch_passed=kill_switch_passed,
         real_sell_allowed=real_sell_allowed,
         position_detected=position_detected,
         open_orders_count=open_orders_count,
