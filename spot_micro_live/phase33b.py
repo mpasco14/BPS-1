@@ -1314,7 +1314,6 @@ def validate_small_order_unlock(config: SpotMicroLiveConfig) -> list[str]:
 
     return blockers
 
-
 def run_spot_small_limit_order(
     config: SpotMicroLiveConfig | None = None,
 ) -> SpotSmallLimitOrderReport:
@@ -1371,6 +1370,7 @@ def run_spot_small_limit_order(
             path="/api/v3/order/test",
             params=params,
         )
+
         test_order_passed = test_order.ok
 
         if not test_order.ok:
@@ -1379,25 +1379,49 @@ def run_spot_small_limit_order(
             metadata["test_order_error"] = test_order.error_message
             metadata["test_order_data"] = sanitize_payload(test_order.data)
             metadata["test_order_params"] = sanitize_payload(params)
-            recommendations.append("Verificar permissões Spot Trading, saldo BRL, filtros e assinatura.")
+            recommendations.append(
+                "Verificar permissões Spot Trading, saldo BRL, filtros e assinatura."
+            )
+
         if test_order.ok:
             order = client.signed_request(
                 method="POST",
                 path="/api/v3/order",
                 params=params,
             )
+
             submitted = order.ok
 
             if not order.ok:
                 blockers.append("spot_order_submit_failed")
                 rejection_detected = True
+                metadata["order_http_status"] = order.http_status
+                metadata["order_error"] = order.error_message
+                metadata["order_data"] = sanitize_payload(order.data)
+
             else:
                 data = order.data or {}
                 order_id = data.get("orderId")
+
                 status = str(data.get("status", "")).upper()
-                fill_detected = status in {"FILLED", "PARTIALLY_FILLED"}
+                executed_qty = float(data.get("executedQty", 0) or 0)
+                cumulative_quote_qty = float(data.get("cummulativeQuoteQty", 0) or 0)
+
+                metadata["submit_order_data"] = sanitize_payload(data)
+
+                fill_detected = (
+                    status in {"FILLED", "PARTIALLY_FILLED"}
+                    or executed_qty > 0
+                    or cumulative_quote_qty > 0
+                )
+
+                if fill_detected:
+                    warnings.append("spot_order_filled_on_submit_response")
+                    metadata["executed_qty"] = executed_qty
+                    metadata["cummulative_quote_qty"] = cumulative_quote_qty
 
                 cancel_attempted = True
+
                 cancel_params = {"symbol": resolved.symbol}
 
                 if order_id:
@@ -1410,10 +1434,58 @@ def run_spot_small_limit_order(
                     path="/api/v3/order",
                     params=cancel_params,
                 )
+
                 cancel_passed = cancel.ok
 
-                if not cancel.ok and not fill_detected:
-                    blockers.append("spot_order_cancel_failed")
+                if not cancel.ok:
+                    metadata["cancel_http_status"] = cancel.http_status
+                    metadata["cancel_error"] = cancel.error_message
+                    metadata["cancel_data"] = sanitize_payload(cancel.data)
+
+                    order_status_params = {"symbol": resolved.symbol}
+
+                    if order_id:
+                        order_status_params["orderId"] = order_id
+                    else:
+                        order_status_params["origClientOrderId"] = client_order_id
+
+                    order_status = client.signed_request(
+                        method="GET",
+                        path="/api/v3/order",
+                        params=order_status_params,
+                    )
+
+                    if order_status.ok:
+                        status_data = order_status.data or {}
+                        order_status_value = str(status_data.get("status", "")).upper()
+                        executed_qty = float(status_data.get("executedQty", 0) or 0)
+                        cumulative_quote_qty = float(
+                            status_data.get("cummulativeQuoteQty", 0) or 0
+                        )
+
+                        metadata["post_cancel_order_status"] = sanitize_payload(
+                            status_data
+                        )
+
+                        if (
+                            order_status_value in {"FILLED", "PARTIALLY_FILLED"}
+                            or executed_qty > 0
+                            or cumulative_quote_qty > 0
+                        ):
+                            fill_detected = True
+                            warnings.append("spot_order_filled_before_cancel_completed")
+                            metadata["executed_qty"] = executed_qty
+                            metadata["cummulative_quote_qty"] = cumulative_quote_qty
+                        else:
+                            blockers.append("spot_order_cancel_failed")
+
+                    else:
+                        blockers.append("spot_order_cancel_failed")
+                        metadata["order_status_http_status"] = order_status.http_status
+                        metadata["order_status_error"] = order_status.error_message
+                        metadata["order_status_data"] = sanitize_payload(
+                            order_status.data
+                        )
 
         reconciliation = run_spot_reconciliation(
             resolved,
@@ -1424,6 +1496,7 @@ def run_spot_small_limit_order(
                 "fill_detected": fill_detected,
             },
         )
+
         final_reconciled = reconciliation.final_reconciled
 
         if not final_reconciled:
@@ -1460,7 +1533,6 @@ def run_spot_small_limit_order(
         recommendations=sorted(set(recommendations)),
         metadata=metadata,
     )
-
 
 def run_spot_reconciliation(
     config: SpotMicroLiveConfig | None = None,
